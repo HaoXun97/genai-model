@@ -1,0 +1,5 @@
+__pycache__/
+bart_finetuned/
+informal_finetuned/
+LLama-3.2-11B-Vision-instruct/
+unsloth_compiled_cache/

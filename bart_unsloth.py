@@ -1,3 +1,6 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 from unsloth import FastLanguageModel
 import torch
 from datasets import load_dataset
@@ -24,7 +27,8 @@ def prepare_dataset(file_path, tokenizer, max_length=512):
             raise KeyError("The dataset must have 'prompt' and 'completion' fields.")
 
         # CORRECTED: Combined multi-line f-string into one line with \n
-        prompts = [f"Human: {q}\nBart:" for q in examples['prompt']]
+        # prompts = [f"Human: {q}\nBart:" for q in examples['prompt']]
+        prompts = [f"Human: {q}\n悟空:" for q in examples['prompt']]
         responses = examples['completion']
 
         # Join prompt + response into a single text. We will mask the prompt part in labels.
@@ -174,7 +178,7 @@ def fine_tune(model, dataset, tokenizer, output_dir, num_epochs,
 
 def main():
     # Configuration
-    base_model_name = "/home/jj/Llama-3.2-11B-Vision-Instruct"
+    base_model_name = "Llama-3.2-11B-Vision-Instruct"
     max_seq_length = 512
     load_in_4bit = True # Changed to True to be consistent with inference settings
     
@@ -281,15 +285,16 @@ def run_inference():
     # Enable inference mode for 2x faster generation
     FastLanguageModel.for_inference(model)
     
-    print("Model loaded! Ask a question. Type 'exit' to quit.\n")
+    print("Model loaded! Ask a question. Type '/exit' to quit.\n")
     
     while True:
         user_input = input("You: ")
-        if user_input.lower() == 'exit':
+        if user_input.lower() == '/exit':
             break
         
         # Prepare input using the correct format from training
-        prompt = f"Human: {user_input}\nBart:"
+        # prompt = f"Human: {user_input}\nBart:"
+        prompt = f"Human: {user_input}\n悟空:"
 
         # CORRECTED: Explicitly pass 'text' and 'images' arguments
         inputs = tokenizer(
@@ -316,9 +321,11 @@ def run_inference():
         if len(response_part) > 1:
             response = response_part[1].strip()
         else:
-            response = response.split("Bart:")[-1].strip()
+            # response = response.split("Bart:")[-1].strip()
+            response = response.split("悟空:")[-1].strip()
 
-        print(f"Bart: {response}\n")
+        # print(f"Bart: {response}\n")
+        print(f"悟空: {response}\n")
         
 if __name__ == "__main__":
     main()

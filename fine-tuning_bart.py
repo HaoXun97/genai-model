@@ -22,7 +22,8 @@ def prepare_dataset(file_path, tokenizer, max_length=256):
 
         # Combine prompt and completion for Causal LM fine-tuning
         full_text = [
-            f"Human: {p}\nBart:{c}{tokenizer.eos_token}"
+            # f"Human: {p}\nBart:{c}{tokenizer.eos_token}"
+            f"Human: {p}\n悟空:{c}{tokenizer.eos_token}"
             for p, c in zip(examples["prompt"], examples["completion"])
         ]
         model_inputs = tokenizer(
@@ -31,7 +32,8 @@ def prepare_dataset(file_path, tokenizer, max_length=256):
 
         # Create labels and mask the prompt portion
         labels = torch.tensor(model_inputs["input_ids"])
-        prompts_only = [f"Human: {p}\nBart:" for p in examples["prompt"]]
+        # prompts_only = [f"Human: {p}\nBart:" for p in examples["prompt"]]
+        prompts_only = [f"Human: {p}\n悟空:" for p in examples["prompt"]]
         prompt_toks = tokenizer(prompts_only, add_special_tokens=False)
         prompt_lengths = [len(p) for p in prompt_toks["input_ids"]]
 

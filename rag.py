@@ -20,8 +20,8 @@ text = " ".join([page.page_content for page in pages])
 
 # Split the text into larger chunks with more overlap
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=2000,
-    chunk_overlap=200,
+    chunk_size=300,    # 2000
+    chunk_overlap=50,  # 200
     length_function=len,
     separators=["\n\n", "\n", " ", ""]
 )

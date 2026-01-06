@@ -329,4 +329,4 @@ def run_inference():
         
 if __name__ == "__main__":
     main()
-    run_inference()
+    # run_inference()

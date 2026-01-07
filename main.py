@@ -1,18 +1,20 @@
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 import torch
 import textwrap
 import chromadb
-from sentence_transformers import SentenceTransformer
 from unsloth import FastLanguageModel
+from sentence_transformers import SentenceTransformer
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Configuration
 PERSIST_DIR = "chroma_db"
 COLLECTION_NAME = "legislation_whitepaper_embeddings"
 EMBED_MODEL_NAME = "BAAI/bge-m3"  # same as your indexing
-TOP_K = 3  # number of retrieved passages to include in prompt
-MAX_CHARS_PER_DOC = 1200  # truncate each retrieved doc to avoid too long prompts
+# number of retrieved passages to include in prompt
+TOP_K = 3
+# truncate each retrieved doc to avoid too long prompts
+MAX_CHARS_PER_DOC = 1200
 
 # Device
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -27,14 +29,18 @@ client = chromadb.PersistentClient(path=PERSIST_DIR)
 collection = client.get_or_create_collection(COLLECTION_NAME)
 
 if collection.count() == 0:
-    print("⚠️  注意：Chroma 集合目前為空。請先執行 `python rag.py` 來建立索引，或確保 `chroma_db` 資料夾存在且已包含向量。")
+    print("⚠️  請先執行 `python rag.py` 來建立索引，或確保 `chroma_db` 資料夾存在且已包含向量。")
+
 
 # Helper: retrieve top-k docs
 def retrieve(query: str, top_k: int = TOP_K):
-    emb = embed_model.encode([query], convert_to_numpy=True, show_progress_bar=False, normalize_embeddings=True)[0]
-    n_results = min(collection.count(), top_k) if collection.count() > 0 else 0
-    if n_results == 0:
+    emb = embed_model.encode([query], convert_to_numpy=True,
+                             show_progress_bar=False, normalize_embeddings=True
+                             )[0]
+    if collection.count() == 0:
         return []
+    # oversample to allow post-filtering by metadata
+    n_results = min(collection.count(), top_k * 3)
     results = collection.query(
         query_embeddings=[emb.tolist()],
         n_results=n_results,
@@ -46,13 +52,26 @@ def retrieve(query: str, top_k: int = TOP_K):
     metas_list = results.get("metadatas", [[]])[0]
     dists_list = results.get("distances", [[]])[0]
 
+    # filter for ArticleType 'A' and keep up to top_k
+    # also exclude items where law_category starts with '廢止法規'
+    filtered = []
     for doc, meta, dist in zip(docs_list, metas_list, dists_list):
+        law_cat = (meta.get("law_category") or "").strip()
+        if law_cat.startswith("廢止法規"):
+            # skip repealed laws
+            continue
+        if meta.get("article_type") == "A":
+            filtered.append((doc, meta, dist))
+    filtered = filtered[:top_k]
+
+    for doc, meta, dist in filtered:
         docs.append({
             "doc": doc,
             "meta": meta,
             "distance": dist
         })
     return docs
+
 
 # Build a prompt that includes retrieved context and the user question
 def build_prompt(query: str, retrieved_docs: list):
@@ -62,8 +81,10 @@ def build_prompt(query: str, retrieved_docs: list):
         parts = []
         for i, r in enumerate(retrieved_docs, start=1):
             meta = r.get("meta", {})
-            header = meta.get("header") or "(無標題)"
-            src = f"{meta.get('file', 'unknown')} (pages {meta.get('start_page')} - {meta.get('end_page')})  標題: {header}"
+            header = meta.get("header")
+            src = (f"{meta.get('law_name')} 法規類別: {meta.get('law_category')} "
+                   f"(若為廢止法規，請注意其內容僅供參考)"
+                   f"條號: {header}")
             # truncate doc text
             text = r.get("doc", "").strip()
             if len(text) > MAX_CHARS_PER_DOC:
@@ -73,15 +94,14 @@ def build_prompt(query: str, retrieved_docs: list):
         ctx = "\n\n---\n\n".join(parts)
 
     prompt = textwrap.dedent(f"""
-    Human: 以下是從法規資料庫檢索到的相關內容，請參考並且根據這些內容回答下面的問題；回答後請簡短列出你引用的來源 (檔名、起訖頁、標題)。
+    以下是從法規資料庫檢索到的相關內容，請參考並且根據這些內容回答下面的問題；回答請簡短列出你引用的來源 (法規名稱、條號)。
 
     {ctx}
 
     問題: {query}
-
-    悟空:
     """)
     return prompt
+
 
 # Load LLM for inference
 print("\nLoading fine-tuned model for inference...")
@@ -96,6 +116,7 @@ FastLanguageModel.for_inference(model)
 print("Model loaded. 你可以開始輸入問題，輸入 /exit 結束。\n")
 
 # Interactive loop
+
 
 def interactive_loop():
     while True:
@@ -119,11 +140,13 @@ def interactive_loop():
         # Build prompt
         prompt = build_prompt(user_input, retrieved)
 
-        # Tokenize with safety: ensure prompt is string, enable truncation and fallback on errors
+        # Tokenize with safety: ensure prompt is string,
+        # enable truncation and fallback on errors
         if not isinstance(prompt, str):
             prompt = str(prompt)
         try:
-            max_len = getattr(tokenizer, "model_max_length", None) or getattr(tokenizer, "max_length", None) or 4096
+            max_len = getattr(tokenizer, "model_max_length", None) or getattr(
+                tokenizer, "max_length", None) or 4096
             truncation_max = max(32, max_len - 64)
             inputs = tokenizer(
                 text=prompt,
@@ -134,14 +157,15 @@ def interactive_loop():
             ).to(model.device)
         except TypeError as e:
             print(f"⚠️ Tokenizer TypeError: {e}. 只使用簡化 prompt 並重試。")
-            safe_prompt = f"Human: {user_input}\n\n悟空:"
+            safe_prompt = f"{user_input}\n\n"
             try:
                 inputs = tokenizer(
                     text=safe_prompt,
                     images=None,
                     return_tensors="pt",
                     truncation=True,
-                    max_length=min(256, getattr(tokenizer, "model_max_length", 1024)-1),
+                    max_length=min(256, getattr(
+                        tokenizer, "model_max_length", 1024)-1),
                 ).to(model.device)
             except Exception as e2:
                 print(f"⚠️ 無法 tokenized，即刻跳過：{e2}")
@@ -153,8 +177,9 @@ def interactive_loop():
         if skip:
             continue
 
-        # Generate — use max_new_tokens to avoid ValueError when input length already equals max_length
-        max_new_tokens = 256  # adjust as needed
+        # Generate — use max_new_tokens to avoid ValueError when
+        # input length already equals max_length
+        max_new_tokens = 350  # allow longer replies; adjust as needed
         try:
             max_pos = getattr(model.config, "max_position_embeddings", None)
             input_len = inputs["input_ids"].shape[1]
@@ -179,12 +204,17 @@ def interactive_loop():
         except Exception as e:
             print(f"⚠️ 生成時發生錯誤：{e}。嘗試用簡短提示重試。")
             try:
-                safe_prompt = f"Human: {user_input}\n悟空:"
-                inputs = tokenizer(text=safe_prompt, images=None, return_tensors="pt", truncation=True, max_length=256).to(model.device)
+                safe_prompt = f"{user_input}\n"
+                inputs = tokenizer(text=safe_prompt,
+                                   images=None,
+                                   return_tensors="pt",
+                                   truncation=True,
+                                   max_length=256
+                                   ).to(model.device)
                 with torch.no_grad():
                     outputs = model.generate(
                         **inputs,
-                        max_new_tokens=128,
+                        max_new_tokens=200,
                         temperature=0.7,
                         do_sample=True,
                         top_p=0.9,
@@ -198,28 +228,33 @@ def interactive_loop():
         if skip:
             continue
 
-        # Decode safely
         try:
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            gen_ids = outputs[0][inputs["input_ids"].shape[1]:]
+            if gen_ids.numel() == 0:
+                # fallback: decode whole sequence
+                response = tokenizer.decode(
+                    outputs[0], skip_special_tokens=True)
+            else:
+                response = tokenizer.decode(gen_ids, skip_special_tokens=True)
         except Exception as e:
             print(f"⚠️ 解碼回應時出錯：{e}。跳過此輸入。")
             continue
 
-        response_part = response.split(prompt)
-        if len(response_part) > 1:
-            answer = response_part[1].strip()
-        else:
-            answer = response.split("悟空:")[-1].strip()
+        answer = response.strip()
 
-        print(f"\n悟空: {answer}\n")
+        print(f"\n{answer}\n")
 
         # Print retrieved sources for transparency
         if retrieved:
             print("🔎 檢索到的來源：")
             for i, r in enumerate(retrieved, start=1):
                 meta = r.get("meta", {})
-                print(f" {i}. {meta.get('file', 'unknown')} | pages {meta.get('start_page')} | 條文: {meta.get('header')}")
+                print(f" {i}. {meta.get('law_name')} {meta.get('header')} | "
+                      f"{meta.get('law_category')} | "
+                      f"法規位階：{meta.get('law_level')} | "
+                      f"{meta.get('law_url')}")
             print("")
+
 
 if __name__ == "__main__":
     interactive_loop()

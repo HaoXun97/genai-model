@@ -1,10 +1,7 @@
 __pycache__/
 bart_finetuned/
 informal_finetuned/
-bart_finetuned_bak/
-informal_finetuned_bak/
 Llama-3.2-11B-Vision-Instruct/
 unsloth_compiled_cache/
 *_cache/
 chroma_db/
-*.pdf
